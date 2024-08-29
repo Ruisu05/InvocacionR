@@ -9,6 +9,7 @@ load_dotenv()
 
 # Initialize bot
 bot = telebot.TeleBot(os.getenv('BOT_TOKEN'))
+ADMINISTRATOR = int(os.getenv('ADMINISTRATOR'))
 
 # Database connection
 db = mysql.connector.connect(
@@ -49,12 +50,29 @@ def get_group_users(group_id):
 
 def mention_users(users):
     mentions = []
+    needs_parsing = False
     for user in users:
         if user['username']:
             mentions.append(f"@{user['username']}")
         else:
             mentions.append(f"[{user['first_name']}](tg://user?id={user['user_id']})")
-    return ' '.join(mentions)
+            needs_parsing = True
+    return ' '.join(mentions), needs_parsing
+
+def get_db_counts():
+    cursor.execute("SELECT COUNT(*) as user_count FROM users")
+    user_count = cursor.fetchone()['user_count']
+    
+    cursor.execute("SELECT COUNT(*) as group_count FROM `groups`")
+    group_count = cursor.fetchone()['group_count']
+    
+    return user_count, group_count
+
+@bot.message_handler(commands=['count'])
+def handle_count(message: Message):
+    if message.from_user.id == ADMINISTRATOR:
+        user_count, group_count = get_db_counts()
+        bot.reply_to(message, f"Database counts:\nUsers: {user_count}\nGroups: {group_count}")
 
 # Handle all messages
 @bot.message_handler(func=lambda message: True, content_types=['text'])
@@ -72,11 +90,14 @@ def handle_message(message: Message):
         
         if message.text.strip() == '/invocar' or message.text.strip() == '/invocar@invocacion_bot' or '@everyone' in lower_text or '@here' in lower_text:
             users = get_group_users(group_id)
-            mentions = mention_users(users)
-            try:
-                bot.reply_to(message, f"{mentions}", parse_mode='Markdown')
-            except:
-                bot.reply_to(message, f"{mentions}")
+            mentions, needs_parsing = mention_users(users)
+            if mentions:
+                if needs_parsing:
+                    bot.reply_to(message, f"{mentions}", parse_mode='Markdown')
+                else:
+                    bot.reply_to(message, f"{mentions}")
+            else:
+                bot.reply_to(message, "No users found in this group.")
 
 # Start the bot
 bot.polling()
