@@ -11,42 +11,66 @@ load_dotenv()
 bot = telebot.TeleBot(os.getenv('BOT_TOKEN'))
 ADMINISTRATOR = int(os.getenv('ADMINISTRATOR'))
 
-# Database connection
-db = mysql.connector.connect(
-    host=os.getenv('DB_HOST'),
-    user=os.getenv('DB_USER'),
-    password=os.getenv('DB_PASSWORD'),
-    database=os.getenv('DB_NAME')
+# Create a connection pool
+db_config = {
+    "host": os.getenv('DB_HOST'),
+    "user": os.getenv('DB_USER'),
+    "password": os.getenv('DB_PASSWORD'),
+    "database": os.getenv('DB_NAME'),
+}
+
+connection_pool = mysql.connector.pooling.MySQLConnectionPool(
+    pool_name="mypool",
+    pool_size=5,
+    **db_config
 )
-cursor = db.cursor(dictionary=True)
 
-# Function to check if user is in database
+def get_cursor():
+    connection = connection_pool.get_connection()
+    cursor = connection.cursor(dictionary=True)
+    return connection, cursor
+
+def close_connection(connection, cursor):
+    cursor.close()
+    connection.close()
+
 def user_in_db(user_id, group_id):
-    cursor.execute("SELECT * FROM user_groups WHERE user_id = %s AND group_id = %s", (user_id, group_id))
-    return cursor.fetchone() is not None
+    connection, cursor = get_cursor()
+    try:
+        cursor.execute("SELECT * FROM user_groups WHERE user_id = %s AND group_id = %s", (user_id, group_id))
+        return cursor.fetchone() is not None
+    finally:
+        close_connection(connection, cursor)
 
-# Function to add user to database
 def add_user(user_id, first_name, username, group_id, group_name):
-    cursor.execute("""
-        INSERT INTO users (user_id, first_name, username) 
-        VALUES (%s, %s, %s) 
-        ON DUPLICATE KEY UPDATE first_name = %s, username = %s
-    """, (user_id, first_name, username, first_name, username))
-    
-    cursor.execute("INSERT IGNORE INTO `groups` (group_id, name) VALUES (%s, %s)", (group_id, group_name))
-    
-    cursor.execute("INSERT IGNORE INTO user_groups (user_id, group_id) VALUES (%s, %s)", (user_id, group_id))
-    
-    db.commit()
+    connection, cursor = get_cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO users (user_id, first_name, username) 
+            VALUES (%s, %s, %s) 
+            ON DUPLICATE KEY UPDATE first_name = %s, username = %s
+        """, (user_id, first_name, username, first_name, username))
+        
+        cursor.execute("INSERT IGNORE INTO `groups` (group_id, name) VALUES (%s, %s)", (group_id, group_name))
+        
+        cursor.execute("INSERT IGNORE INTO user_groups (user_id, group_id) VALUES (%s, %s)", (user_id, group_id))
+        
+        connection.commit()
+    finally:
+        close_connection(connection, cursor)
 
 def get_group_users(group_id):
-    cursor.execute("""
-        SELECT u.user_id, u.first_name, u.username
-        FROM users u
-        JOIN user_groups ug ON u.user_id = ug.user_id
-        WHERE ug.group_id = %s
-    """, (group_id,))
-    return cursor.fetchall()
+    connection, cursor = get_cursor()
+    try:
+        cursor.execute("""
+            SELECT u.user_id, u.first_name, u.username
+            FROM users u
+            JOIN user_groups ug ON u.user_id = ug.user_id
+            WHERE ug.group_id = %s
+        """, (group_id,))
+        return cursor.fetchall()
+    finally:
+        close_connection(connection, cursor)
 
 def mention_users(users):
     mentions = []
@@ -60,19 +84,25 @@ def mention_users(users):
     return ' '.join(mentions), needs_parsing
 
 def get_db_counts():
-    cursor.execute("SELECT COUNT(*) as user_count FROM users")
-    user_count = cursor.fetchone()['user_count']
-    
-    cursor.execute("SELECT COUNT(*) as group_count FROM `groups`")
-    group_count = cursor.fetchone()['group_count']
-    
-    return user_count, group_count
+    connection, cursor = get_cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) as user_count FROM users")
+        user_count = cursor.fetchone()['user_count']
+        
+        cursor.execute("SELECT COUNT(*) as group_count FROM `groups`")
+        group_count = cursor.fetchone()['group_count']
+        
+        return user_count, group_count
+    finally:
+        close_connection(connection, cursor)
 
 @bot.message_handler(commands=['count'])
 def handle_count(message: Message):
     if message.from_user.id == ADMINISTRATOR:
         user_count, group_count = get_db_counts()
         bot.reply_to(message, f"Database counts:\nUsers: {user_count}\nGroups: {group_count}")
+    else:
+        bot.reply_to(message, "You don't have permission to use this command.")
 
 # Handle all messages
 @bot.message_handler(func=lambda message: True, content_types=['text'])
