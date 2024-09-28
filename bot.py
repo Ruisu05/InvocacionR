@@ -77,7 +77,8 @@ def mention_users(users):
     needs_parsing = False
     for user in users:
         if user['username']:
-            mentions.append(f"@{user['username']}")
+            escaped_username = user['username'].replace('_', '\\_')
+            mentions.append(f"@{escaped_username}")
         else:
             mentions.append(f"[{user['first_name']}](tg://user?id={user['user_id']})")
             needs_parsing = True
@@ -123,7 +124,8 @@ def handle_message(message: Message):
             mentions, needs_parsing = mention_users(users)
             if mentions:
                 if needs_parsing:
-                    bot.reply_to(message, f"{mentions}", parse_mode='Markdown')
+                    mentions_escaped = mentions.replace('.', '\\.').replace('-', '\\-').replace('!', '\\!')
+                    bot.reply_to(message, f"{mentions_escaped}", parse_mode='MarkdownV2')
                 else:
                     bot.reply_to(message, f"{mentions}")
             else:
